@@ -1,0 +1,15 @@
+# Build artifacts
+build/
+dist/
+*.o
+*.elf
+*.velf
+*.self
+*.prx
+*.skprx
+*.suprx
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/

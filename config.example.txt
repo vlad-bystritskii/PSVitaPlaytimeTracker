@@ -1,0 +1,14 @@
+# VitaPlaytimeTracker config
+# Copy to:  ux0:data/VitaPlaytime/config.txt   (on the Vita)
+# Plain "key=value" lines. '#' starts a comment. Whitespace around '=' is ignored.
+
+# Home Assistant box running the Playtime Collector add-on (host and port, no scheme).
+ha_host=192.168.1.106
+ha_port=3301
+
+# Must match the add-on's `auth_token` option. Leave empty if the add-on has no token.
+auth_token=
+
+# Player label this Vita reports as (the "account" in Home Assistant).
+# Vita is single-user, so this is just a name. One per console.
+account=vita
