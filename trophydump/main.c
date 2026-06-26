@@ -97,6 +97,7 @@ static void log_listing(const char *mp) {
 
 static uint8_t g_trp[40960];
 static uint8_t g_icon[512 * 1024];  /* one trophy PNG at a time */
+static int g_listed = 0;  /* one-shot: log the first set's mount root to find icon filenames */
 
 /* Copy decrypted per-trophy icons (TROP<digits>.PNG, e.g. TROP000.PNG) out of the
  * mounted folder to ux0:data/VitaPlaytime/icons/<npcommid>/<id>.png — the id is the
@@ -114,10 +115,14 @@ static int copy_icons(const char *mp, const char *name) {
 	if (d < 0) { logfmt("    icons: Dopen %s -> 0x%08X", dir, d); return 0; }
 
 	int copied = 0;
+	int diag = !g_listed;  /* dump the first set's full root listing once */
+	if (diag) logfmt("    [mount listing for %s @ %s]", name, mp);
 	SceIoDirent e;
 	memset(&e, 0, sizeof(e));
 	while (sceIoDread(d, &e) > 0) {
 		const char *nm = e.d_name;
+		if (diag) logfmt("      %s %s (%lld)",
+			SCE_S_ISDIR(e.d_stat.st_mode) ? "DIR " : "file", nm, (long long)e.d_stat.st_size);
 		if ((nm[0] == 'T' || nm[0] == 't') && (nm[1] == 'R' || nm[1] == 'r') &&
 		    (nm[2] == 'O' || nm[2] == 'o') && (nm[3] == 'P' || nm[3] == 'p')) {
 			int id = 0, k = 4, has = 0;
@@ -134,6 +139,7 @@ static int copy_icons(const char *mp, const char *name) {
 		}
 		memset(&e, 0, sizeof(e));
 	}
+	if (diag) g_listed = 1;
 	sceIoDclose(d);
 	return copied;
 }
