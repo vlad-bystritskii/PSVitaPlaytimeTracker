@@ -7,6 +7,8 @@ add_executable(playtime_k main.c)
 target_link_libraries(playtime_k
   SceSysmemForDriver_stub
   SceProcessmgrForDriver_stub
+  SceProcessmgrForKernel_stub
+  SceSysrootForKernel_stub
   SceIofilemgrForDriver_stub
   SceThreadmgrForDriver_stub
   SceSysclibForDriver_stub

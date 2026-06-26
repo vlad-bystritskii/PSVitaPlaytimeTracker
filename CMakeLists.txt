@@ -6,7 +6,7 @@
 # Outputs:  build/kernel/playtime_k.skprx   build/user/playtime_u.suprx
 # Easiest path is the Docker build — see docs/BUILD.md.
 
-cmake_minimum_required(VERSION 3.2)
+cmake_minimum_required(VERSION 3.5)
 
 if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
   if(DEFINED ENV{VITASDK})

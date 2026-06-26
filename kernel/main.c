@@ -19,6 +19,7 @@
 #include <taihen.h>
 #include <psp2kern/kernel/modulemgr.h>
 #include <psp2kern/kernel/processmgr.h>
+#include <psp2kern/kernel/sysroot.h>   /* ksceKernelGetProcessTitleId -> ksceKernelSysrootGetProcessTitleId */
 #include <psp2kern/kernel/threadmgr.h>
 #include <psp2kern/io/fcntl.h>
 #include <psp2kern/io/stat.h>
@@ -46,13 +47,13 @@ static int is_system_title(const char *tid)
 
 /* Append one finished session as a JSON line to the queue.
  * Kept to %s/%u only — kernel snprintf (SceSysclib) can't be trusted with %llu. */
-static void emit_session(const char *tid, uint32_t secs)
+static void emit_session(const char *tid, uint32_t secs, uint32_t ended)
 {
 	if (secs == 0) return;
 
-	char line[128];
+	char line[160];
 	int n = snprintf(line, sizeof(line),
-		"{\"titleId\":\"%s\",\"seconds\":%u}\n", tid, secs);
+		"{\"titleId\":\"%s\",\"seconds\":%u,\"endedAt\":%u}\n", tid, secs, ended);
 	if (n <= 0) return;
 
 	SceUID fd = ksceIoOpen(PT_QUEUE,
@@ -79,7 +80,8 @@ static void session_stop(void)
 	if (!have) return;
 	uint64_t now = ksceKernelGetSystemTimeWide();
 	uint32_t secs = (uint32_t)((now - cur_start) / SECOND);
-	emit_session(cur_tid, secs);
+	uint32_t ended = (uint32_t)ksceKernelLibcTime(0);  /* Unix seconds at session end */
+	emit_session(cur_tid, secs, ended);
 	have = 0;
 }
 

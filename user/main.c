@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdint.h>
 
+#include <psp2/kernel/modulemgr.h>   /* SCE_KERNEL_START_SUCCESS / STOP_SUCCESS */
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/processmgr.h>
 #include <psp2/io/fcntl.h>
@@ -27,6 +28,7 @@
 #define PT_CONFIG  PT_DIR "/config.txt"
 #define PT_PENDING PT_DIR "/pending.jsonl"
 #define PT_SENDING PT_DIR "/sending.jsonl"
+#define PT_LOG     PT_DIR "/uploader.log"
 
 #define POLL_SEC      30
 #define QUEUE_MAX     (64 * 1024)
@@ -64,6 +66,17 @@ static int read_file(const char *path, char *buf, int max)
 	if (n < 0) return -1;
 	buf[n] = 0;
 	return n;
+}
+
+/* ---- diagnostic log (temporary) -------------------------------------- */
+
+static void ulog(const char *s)
+{
+	SceUID fd = sceIoOpen(PT_LOG, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666);
+	if (fd < 0) return;
+	sceIoWrite(fd, s, strlen(s));
+	sceIoWrite(fd, "\n", 1);
+	sceIoClose(fd);
 }
 
 /* ---- config ---------------------------------------------------------- */
@@ -182,6 +195,10 @@ static void json_escape(const char *in, char *out, int outsz)
 
 /* ---- networking ------------------------------------------------------ */
 
+#ifdef DIAG_NONET
+static void ensure_net(void) { net_ready = 1; (void)net_pool; }
+static int  net_connected(void) { return 1; }
+#else
 static void ensure_net(void)
 {
 	if (net_ready) return;
@@ -206,6 +223,7 @@ static int net_connected(void)
 	if (sceNetCtlInetGetState(&state) < 0) return 0;
 	return state == SCE_NETCTL_STATE_CONNECTED;
 }
+#endif
 
 /* POST one session. returns 0 on a 2xx, -1 otherwise. */
 static int post_session(const Config *c, const char *title_id,
@@ -224,20 +242,34 @@ static int post_session(const Config *c, const char *title_id,
 		c->account, title_id, title_esc, seconds);
 	if (blen <= 0) return -1;
 
-	int rc = -1, status = 0;
+#ifdef DIAG_NONET
+	{
+		char m[256];
+		snprintf(m, sizeof(m), "post(DIAG): would POST %s body=%s", url, body);
+		ulog(m);
+	}
+	return -1;   /* keep entry queued; this build only tests module load */
+#else
+	int rc = -1, status = 0, conn = -1, req = -1, send = 0x7FFFFFFF;
 	int tpl = sceHttpCreateTemplate("VitaPlaytime/1.0", SCE_HTTP_VERSION_1_1, 1);
-	if (tpl < 0) return -1;
+	if (tpl < 0) {
+		char m[96];
+		snprintf(m, sizeof(m), "post: CreateTemplate failed tpl=0x%08X", tpl);
+		ulog(m);
+		return -1;
+	}
 	sceHttpSetConnectTimeOut(tpl, 5 * 1000 * 1000);
-	int conn = sceHttpCreateConnectionWithURL(tpl, url, 0);
+	conn = sceHttpCreateConnectionWithURL(tpl, url, 0);
 	if (conn >= 0) {
-		int req = sceHttpCreateRequestWithURL(conn, SCE_HTTP_METHOD_POST, url, blen);
+		req = sceHttpCreateRequestWithURL(conn, SCE_HTTP_METHOD_POST, url, blen);
 		if (req >= 0) {
 			sceHttpAddRequestHeader(req, "Content-Type", "application/json",
 						SCE_HTTP_HEADER_ADD);
 			if (c->token[0])
 				sceHttpAddRequestHeader(req, "X-Auth-Token", c->token,
 							SCE_HTTP_HEADER_ADD);
-			if (sceHttpSendRequest(req, body, blen) >= 0)
+			send = sceHttpSendRequest(req, body, blen);
+			if (send >= 0)
 				sceHttpGetStatusCode(req, &status);
 			sceHttpDeleteRequest(req);
 		}
@@ -246,7 +278,15 @@ static int post_session(const Config *c, const char *title_id,
 	sceHttpDeleteTemplate(tpl);
 
 	rc = (status >= 200 && status < 300) ? 0 : -1;
+	{
+		char m[224];
+		snprintf(m, sizeof(m),
+			"post: url=%s conn=0x%08X req=0x%08X send=0x%08X status=%d rc=%d",
+			url, conn, req, send, status, rc);
+		ulog(m);
+	}
 	return rc;
+#endif
 }
 
 /* ---- queue drain ----------------------------------------------------- */
@@ -311,23 +351,45 @@ static int worker(SceSize args, void *argp)
 	(void)args; (void)argp;
 	sceIoMkdir("ux0:data", 0777);
 	sceIoMkdir(PT_DIR, 0777);
+	ulog("worker: started");
 
 	for (;;) {
 		Config c;
-		if (load_config(&c) == 0) {
+		int cfg = load_config(&c);
+		if (cfg == 0) {
 			ensure_net();
+			int conn = net_connected();
+			char m[160];
+			snprintf(m, sizeof(m), "pass: cfg=ok host=%s:%d connected=%d",
+				c.host, c.port, conn);
+			ulog(m);
 			drain_queue(&c);
+		} else {
+			ulog("pass: load_config FAILED (no config.txt / empty ha_host)");
 		}
 		sceKernelDelayThread((SceUInt)POLL_SEC * 1000 * 1000);
 	}
 	return sceKernelExitDeleteThread(0);
 }
 
+/* Built with -nostartfiles (no crt0), exactly like the working kernel module. The real
+ * module entry is module_start (see playtime_u.yml); _start is a weak alias so the linker
+ * has an entry symbol. crt0 would normally supply the newlib init/teardown glue — we stub
+ * it empty: we never call exit(), and the string/format helpers we use do not need newlib
+ * reent initialisation. */
+void _start() __attribute__((weak, alias("module_start")));
+void _init_vita_newlib(void) {}
+void _free_vita_newlib(void) {}
+
 int module_start(SceSize args, void *argp)
 {
 	(void)args; (void)argp;
+	ulog("module_start: loaded into SceShell");
 	SceUID thid = sceKernelCreateThread("playtime_upload", worker,
 					    0x10000100, 0x4000, 0, 0, NULL);
+	char m[64];
+	snprintf(m, sizeof(m), "module_start: thid=0x%08X", thid);
+	ulog(m);
 	if (thid >= 0)
 		sceKernelStartThread(thid, 0, NULL);
 	return SCE_KERNEL_START_SUCCESS;
